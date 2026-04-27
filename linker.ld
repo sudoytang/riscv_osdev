@@ -9,6 +9,8 @@ SECTIONS
 
     .text : {
         *(.text.entry)
+        . = ALIGN(8);
+        *(.text.trap .text.trap.*)
         *(.text .text.*)
     }
 
