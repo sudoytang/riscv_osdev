@@ -1,12 +1,14 @@
 #![no_std]
 #![no_main]
 
-use core::arch::global_asm;
+mod uart;
 
-global_asm!(include_str!("entry.S"));
+
+core::arch::global_asm!(include_str!("entry.S"));
 
 #[unsafe(no_mangle)]
 pub extern "C" fn kernel_main() -> ! {
+    println!("Hello, RISC-V!\n");
     loop {}
 }
 
