@@ -48,5 +48,6 @@ macro_rules! print {
 macro_rules! println {
     ($($arg:tt)*) => {
         $crate::uart::print(format_args!($($arg)*));
+        $crate::uart::print(format_args!("\n"));
     };
 }
