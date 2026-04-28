@@ -63,7 +63,8 @@ fn user_exit(exit_code: usize) -> ! {
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn user_main() -> ! {
+pub extern "C" fn user_main_0() -> ! {
+    user_println!("Task 0");
     // krnl_println!("After ecall: returned value = {}", ret);
     // ^^^ You shouldn't use this in user mode, it is kernel only and it won't work
     //     once you implemented Virtual Memory.
@@ -78,5 +79,13 @@ pub extern "C" fn user_main() -> ! {
     user_println!("Illegal instruction trap handled.");
     user_println!("Bye!");
 
+    user_exit(0);
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn user_main_1() -> ! {
+    user_println!("Task 1");
+    user_println!("Hello from U-mode via syscall!");
+    user_println!("Bye!");
     user_exit(0);
 }

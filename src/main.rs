@@ -7,7 +7,7 @@ mod trap;
 mod uart;
 mod user;
 
-use user::user_main;
+use user::{user_main_0, user_main_1};
 
 // Entry point
 // This sets up the boot stack and calls kernel_main
@@ -38,8 +38,10 @@ pub extern "C" fn kernel_main() -> ! {
     }
     krnl_println!("Illegal instruction trap handled.");
 
-    let mut task = task::Task::new(user_main as *const () as usize, user_stack_top());
-    run_task(&mut task);
+    task::init_task(0, user_main_0 as *const () as usize, task::user_stack_top(0));
+    task::init_task(1, user_main_1 as *const () as usize, task::user_stack_top(1));
+
+    task::schedule();
 }
 
 #[panic_handler]
@@ -59,12 +61,8 @@ impl Stack {
     }
 }
 
-static mut USER_STACK: Stack = Stack::new();
-static mut KERNEL_TRAP_STACK: Stack = Stack::new();
 
-fn user_stack_top() -> usize {
-    unsafe { (core::ptr::addr_of_mut!(USER_STACK.0) as *mut u8).add(STACK_SIZE) as usize }
-}
+static mut KERNEL_TRAP_STACK: Stack = Stack::new();
 
 fn kernel_trap_stack_top() -> usize {
     unsafe { (core::ptr::addr_of_mut!(KERNEL_TRAP_STACK.0) as *mut u8).add(STACK_SIZE) as usize }
@@ -78,14 +76,9 @@ fn init_kernel_trap_stack() {
     }
 }
 
-fn run_task(task: &mut task::Task) -> ! {
-    task::set_current_task(task);
-    task::mark_current_task_state(task::TaskState::Running);
-    krnl_println!("Entering user mode...");
-    enter_user_mode(task.entry, task.user_sp);
-}
 
-fn enter_user_mode(entry: usize, user_sp: usize) -> ! {
+
+pub fn enter_user_mode(entry: usize, user_sp: usize) -> ! {
     unsafe {
         core::arch::asm!(
             "csrw sepc, {entry}",
