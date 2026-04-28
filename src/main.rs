@@ -3,8 +3,12 @@
 
 mod uart;
 mod trap;
+mod user;
 
+use user::user_main;
 
+// Entry point
+// This sets up the boot stack and calls kernel_main
 core::arch::global_asm!(
 r#"
 .section .text.entry
@@ -28,11 +32,12 @@ pub extern "C" fn kernel_main() -> ! {
     init_kernel_trap_stack();
     krnl_println!("Hello, RISC-V!\n");
 
+    krnl_println!("Let's trigger a trap of illegal instruction...");
     unsafe {
         // trigger a trap of illegal instruction
         core::arch::asm!(".word 0");
     }
-    krnl_println!("After illegal instruction trap.");
+    krnl_println!("Illegal instruction trap handled.");
 
     krnl_println!("Entering user mode...");
     enter_user_mode(user_main as *const () as usize, user_stack_top());
@@ -79,63 +84,6 @@ fn init_kernel_trap_stack() {
             "csrw sscratch, zero",
         );
     }
-}
-
-struct UserStdout;
-
-impl core::fmt::Write for UserStdout {
-    fn write_str(&mut self, s: &str) -> core::fmt::Result {
-        user_print_str(s);
-        Ok(())
-    }
-}
-
-fn user_putchar(ch: u8) {
-    unsafe {
-        core::arch::asm!(
-            "ecall",
-            in("a7") trap::Syscall::SYS_PUTCHAR,
-            in("a0") ch as usize,
-        );
-    }
-}
-
-fn user_print_str(s: &str) {
-    for ch in s.bytes() {
-        user_putchar(ch);
-    }
-}
-
-fn user_print_fmt(args: core::fmt::Arguments) {
-    use core::fmt::Write;
-
-    UserStdout.write_fmt(args).unwrap();
-}
-
-macro_rules! user_print {
-    ($($arg:tt)*) => {
-        user_print_fmt(format_args!($($arg)*));
-    };
-}
-
-macro_rules! user_println {
-    () => {
-        user_print!("\n");
-    };
-    ($($arg:tt)*) => {
-        user_print!("{}\n", format_args!($($arg)*));
-    };
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn user_main() -> ! {
-    // krnl_println!("After ecall: returned value = {}", ret);
-    // ^^^ You shouldn't use this in user mode, it is kernel only and it won't work
-    //     once you implemented Virtual Memory.
-    // Use user_println! instead
-    user_println!("Hello from U-mode via syscall!");
-
-    loop {}
 }
 
 fn enter_user_mode(entry: usize, user_sp: usize) -> ! {

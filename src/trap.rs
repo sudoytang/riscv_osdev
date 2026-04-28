@@ -326,24 +326,28 @@ impl InterruptCause {
 pub enum Syscall {
     Reserved,
     PutChar,
+    Exit,
     Unknown(usize),
 }
 
 impl Syscall {
     pub const SYS_PUTCHAR: usize = Self::PutChar.into_usize();
+    pub const SYS_EXIT: usize = Self::Exit.into_usize();
 
     const fn into_usize(self) -> usize {
         match self {
-            Self::PutChar => 1,
             Self::Reserved => 0,
+            Self::PutChar => 1,
+            Self::Exit => 2,
             Self::Unknown(n) => n,
         }
     }
 
     fn from_number(number: usize) -> Self {
         match number {
-            Self::SYS_PUTCHAR => Self::PutChar,
             0 => Self::Reserved,
+            Self::SYS_PUTCHAR => Self::PutChar,
+            Self::SYS_EXIT => Self::Exit,
             _ => Self::Unknown(number),
         }
     }
@@ -352,14 +356,20 @@ impl Syscall {
 impl Syscall {
     pub fn krnl_handle(self, tf: &mut TrapFrame) {
         match self {
+            Self::Reserved => {
+                krnl_println!("  syscall 0 reserved");
+                tf.regs[A0] = usize::MAX;
+            }
             Self::PutChar => {
                 let ch = tf.regs[A0] as u8;
                 krnl_print!("{}", ch as char);
                 tf.regs[A0] = 0;
             }
-            Self::Reserved => {
-                krnl_println!("  syscall 0 reserved");
-                tf.regs[A0] = usize::MAX;
+            Self::Exit => {
+                let exit_code = tf.regs[A0];
+                krnl_println!("  User exited with code {}", exit_code);
+                krnl_println!("  Kernel halted");
+                loop {}
             }
             Self::Unknown(n) => {
                 krnl_println!("  syscall {} not implemented", n);
