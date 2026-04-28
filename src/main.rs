@@ -1,8 +1,9 @@
 #![no_std]
 #![no_main]
 
-mod uart;
+mod syscall;
 mod trap;
+mod uart;
 mod user;
 
 use user::user_main;
@@ -10,7 +11,7 @@ use user::user_main;
 // Entry point
 // This sets up the boot stack and calls kernel_main
 core::arch::global_asm!(
-r#"
+    r#"
 .section .text.entry
 .global _start
 
@@ -22,9 +23,6 @@ spin:
     j spin
 "#
 );
-
-
-
 
 #[unsafe(no_mangle)]
 pub extern "C" fn kernel_main() -> ! {
@@ -48,7 +46,6 @@ fn panic(_: &core::panic::PanicInfo) -> ! {
     loop {}
 }
 
-
 // Stack
 const STACK_SIZE: usize = 4096 * 16;
 
@@ -65,24 +62,18 @@ static mut USER_STACK: Stack = Stack::new();
 static mut KERNEL_TRAP_STACK: Stack = Stack::new();
 
 fn user_stack_top() -> usize {
-    unsafe {
-        (core::ptr::addr_of_mut!(USER_STACK.0) as *mut u8).add(STACK_SIZE) as usize
-    }
+    unsafe { (core::ptr::addr_of_mut!(USER_STACK.0) as *mut u8).add(STACK_SIZE) as usize }
 }
 
 fn kernel_trap_stack_top() -> usize {
-    unsafe {
-        (core::ptr::addr_of_mut!(KERNEL_TRAP_STACK.0) as *mut u8).add(STACK_SIZE) as usize
-    }
+    unsafe { (core::ptr::addr_of_mut!(KERNEL_TRAP_STACK.0) as *mut u8).add(STACK_SIZE) as usize }
 }
 
 // Convention: When running in S-mode, the sscratch is 0
 // At the point before entering U-mode, set sscratch to kernel_trap_stack_top
 fn init_kernel_trap_stack() {
     unsafe {
-        core::arch::asm!(
-            "csrw sscratch, zero",
-        );
+        core::arch::asm!("csrw sscratch, zero",);
     }
 }
 

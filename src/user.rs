@@ -1,31 +1,32 @@
-use crate::trap;
+use crate::syscall;
 
 struct UserStdout;
 
-
-
 impl core::fmt::Write for UserStdout {
     fn write_str(&mut self, s: &str) -> core::fmt::Result {
-        user_print_str(s);
+        user_write_str(syscall::STDOUT_FD, s);
         Ok(())
     }
 }
 
-// Wrapper for syscall 1: SYS_PUTCHAR
-fn user_putchar(ch: u8) {
+// Wrapper for syscall 1: SYS_WRITE
+fn user_write(fd: usize, buf: &[u8]) -> usize {
+    let ret: usize;
+
     unsafe {
         core::arch::asm!(
             "ecall",
-            in("a7") trap::Syscall::SYS_PUTCHAR,
-            in("a0") ch as usize,
+            in("a7") syscall::Syscall::SYS_WRITE,
+            inlateout("a0") fd => ret,
+            in("a1") buf.as_ptr() as usize,
+            in("a2") buf.len(),
         );
     }
+    ret
 }
 
-fn user_print_str(s: &str) {
-    for ch in s.bytes() {
-        user_putchar(ch);
-    }
+fn user_write_str(fd: usize, s: &str) {
+    user_write(fd, s.as_bytes());
 }
 
 fn user_print_fmt(args: core::fmt::Arguments) {
@@ -54,7 +55,7 @@ fn user_exit(exit_code: usize) -> ! {
     unsafe {
         core::arch::asm!(
             "ecall",
-            in("a7") trap::Syscall::SYS_EXIT,
+            in("a7") syscall::Syscall::SYS_EXIT,
             in("a0") exit_code as usize,
             options(noreturn),
         );
@@ -76,7 +77,6 @@ pub extern "C" fn user_main() -> ! {
     }
     user_println!("Illegal instruction trap handled.");
     user_println!("Bye!");
-
 
     user_exit(0);
 }

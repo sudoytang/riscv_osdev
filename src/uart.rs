@@ -1,7 +1,6 @@
 use core::fmt::{self, Write};
 use core::ptr::{read_volatile, write_volatile};
 
-
 struct Uart0;
 
 const UART0_BASE: usize = 0x1000_0000;

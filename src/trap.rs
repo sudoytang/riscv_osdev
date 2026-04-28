@@ -1,3 +1,4 @@
+use crate::syscall::{STDOUT_FD, Syscall};
 use crate::{krnl_print, krnl_println};
 
 #[unsafe(naked)]
@@ -142,7 +143,6 @@ pub unsafe extern "C" fn __trap_entry() {
         handler = sym trap_handler,
     )
 }
-
 
 #[repr(C)]
 pub struct TrapFrame {
@@ -322,66 +322,45 @@ impl InterruptCause {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum Syscall {
-    Reserved,
-    PutChar,
-    Exit,
-    Unknown(usize),
-}
-
-impl Syscall {
-    pub const SYS_PUTCHAR: usize = Self::PutChar.into_usize();
-    pub const SYS_EXIT: usize = Self::Exit.into_usize();
-
-    const fn into_usize(self) -> usize {
-        match self {
-            Self::Reserved => 0,
-            Self::PutChar => 1,
-            Self::Exit => 2,
-            Self::Unknown(n) => n,
+fn handle_syscall(syscall: Syscall, tf: &mut TrapFrame) {
+    match syscall {
+        Syscall::Reserved => {
+            krnl_println!("  syscall 0 reserved");
+            tf.regs[A0] = usize::MAX;
         }
-    }
+        Syscall::Write => {
+            let fd = tf.regs[A0];
+            if fd != STDOUT_FD {
+                // Now we only accept stdout.
+                krnl_println!("  invalid fd: {}", fd);
+                tf.regs[A0] = usize::MAX;
+                return;
+            }
 
-    fn from_number(number: usize) -> Self {
-        match number {
-            0 => Self::Reserved,
-            Self::SYS_PUTCHAR => Self::PutChar,
-            Self::SYS_EXIT => Self::Exit,
-            _ => Self::Unknown(number),
+            let ptr = tf.regs[A1] as *const u8;
+            let size = tf.regs[A2];
+            let bytes: &[u8] = unsafe { core::slice::from_raw_parts(ptr, size) };
+            let mut count = 0;
+            for &b in bytes {
+                krnl_print!("{}", b as char);
+                count += 1;
+            }
+            tf.regs[A0] = count;
         }
-    }
-}
-
-impl Syscall {
-    pub fn krnl_handle(self, tf: &mut TrapFrame) {
-        match self {
-            Self::Reserved => {
-                krnl_println!("  syscall 0 reserved");
-                tf.regs[A0] = usize::MAX;
-            }
-            Self::PutChar => {
-                let ch = tf.regs[A0] as u8;
-                krnl_print!("{}", ch as char);
-                tf.regs[A0] = 0;
-            }
-            Self::Exit => {
-                let exit_code = tf.regs[A0];
-                krnl_println!("  User exited with code {}", exit_code);
-                krnl_println!("  Kernel halted");
-                loop {}
-            }
-            Self::Unknown(n) => {
-                krnl_println!("  syscall {} not implemented", n);
-                tf.regs[A0] = usize::MAX;
-            }
+        Syscall::Exit => {
+            let exit_code = tf.regs[A0];
+            krnl_println!("  User exited with code {}", exit_code);
+            krnl_println!("  Kernel halted");
+            loop {}
+        }
+        Syscall::Unknown(n) => {
+            krnl_println!("  syscall {} not implemented", n);
+            tf.regs[A0] = usize::MAX;
         }
     }
 }
 
 const TRACE_SYSCALLS: bool = false;
-
-
 
 #[unsafe(no_mangle)]
 pub extern "C" fn trap_handler(tf: &mut TrapFrame) {
@@ -401,8 +380,6 @@ pub extern "C" fn trap_handler(tf: &mut TrapFrame) {
         krnl_println!("  stval  = {:#x}", stval);
     }
 
-
-
     match cause {
         TrapCause::Exception(ExceptionCause::IllegalInstruction) => {
             krnl_println!("  action = skip illegal instruction");
@@ -414,7 +391,7 @@ pub extern "C" fn trap_handler(tf: &mut TrapFrame) {
             }
             let syscall_num = tf.regs[A7];
             let syscall = Syscall::from_number(syscall_num);
-            syscall.krnl_handle(tf);
+            handle_syscall(syscall, tf);
             tf.sepc += 4;
         }
         _ => {
