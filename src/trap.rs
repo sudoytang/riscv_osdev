@@ -349,9 +349,7 @@ fn handle_syscall(syscall: Syscall, tf: &mut TrapFrame) {
         }
         Syscall::Exit => {
             let exit_code = tf.regs[A0];
-            krnl_println!("  User exited with code {}", exit_code);
-            krnl_println!("  Kernel halted");
-            loop {}
+            crate::task::exit_current_task(exit_code);
         }
         Syscall::Unknown(n) => {
             krnl_println!("  syscall {} not implemented", n);

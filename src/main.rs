@@ -2,6 +2,7 @@
 #![no_main]
 
 mod syscall;
+mod task;
 mod trap;
 mod uart;
 mod user;
@@ -37,8 +38,8 @@ pub extern "C" fn kernel_main() -> ! {
     }
     krnl_println!("Illegal instruction trap handled.");
 
-    krnl_println!("Entering user mode...");
-    enter_user_mode(user_main as *const () as usize, user_stack_top());
+    let mut task = task::Task::new(user_main as *const () as usize, user_stack_top());
+    run_task(&mut task);
 }
 
 #[panic_handler]
@@ -75,6 +76,13 @@ fn init_kernel_trap_stack() {
     unsafe {
         core::arch::asm!("csrw sscratch, zero",);
     }
+}
+
+fn run_task(task: &mut task::Task) -> ! {
+    task::set_current_task(task);
+    task::mark_current_task_state(task::TaskState::Running);
+    krnl_println!("Entering user mode...");
+    enter_user_mode(task.entry, task.user_sp);
 }
 
 fn enter_user_mode(entry: usize, user_sp: usize) -> ! {
