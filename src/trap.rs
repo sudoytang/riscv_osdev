@@ -1,17 +1,29 @@
-use crate::println;
+use crate::{krnl_print, krnl_println};
 
 #[unsafe(naked)]
 #[unsafe(no_mangle)]
 #[unsafe(link_section = ".text.trap")]
 pub unsafe extern "C" fn __trap_entry() {
     core::arch::naked_asm!(
-        // allocate space for TrapFrame
-        "addi sp, sp, -{trap_frame_size}",
-        // save registers
-        // x0 is 0 so skip it
+        // Swap sp with sscratch to detect whether the trap came from U-mode.
+        // S-mode convention: sscratch = 0.
+        // U-mode convention: sscratch = kernel trap stack top.
+        "csrrw sp, sscratch, sp",
+        "bnez sp, .Lfrom_u_mode",
 
+        // From S-mode: sp is now 0, and sscratch has the original kernel sp.
+        // Swap back so we keep handling the trap on the current kernel stack.
+        "csrrw sp, sscratch, sp",
+
+        // U-mode arrives here with sp already switched to kernel trap stack top.
+        // S-mode arrives here after swapping back to the original kernel sp.
+        ".Lfrom_u_mode:",
+        "addi sp, sp, -{trap_frame_size}",
+
+        // Save general-purpose registers before using any of them as temporaries.
+        // x0 is always zero, so there is no need to save it.
         "sd x1, 8(sp)",
-        // x2 is sp, save it later
+        // x2 is the interrupted sp. Save it after all other registers are safe.
         "sd x3, 24(sp)",
         "sd x4, 32(sp)",
         "sd x5, 40(sp)",
@@ -42,45 +54,41 @@ pub unsafe extern "C" fn __trap_entry() {
         "sd x30, 240(sp)",
         "sd x31, 248(sp)",
 
-        // save sp
-        "addi a0, sp, 272",
+        // Now x10/a0 is saved, so it is safe to use as a temporary.
+        // If sscratch is non-zero, it holds the interrupted user sp.
+        // Otherwise this was an S-mode trap, and the interrupted sp is
+        // the current trap frame base plus the trap frame size.
+        "csrr a0, sscratch",    // <- a0 = user sp if in U-mode, 0 if in S-mode
+        "bnez a0, .Lsave_interrupted_sp",
+        "addi a0, sp, {trap_frame_size}",  // <- a0 = sp + sizeof(TrapFrame) if in S-mode
+        ".Lsave_interrupted_sp:",
         "sd a0, 16(sp)",
-        // save sepc
+
+        // Save trap CSRs.
         "csrr a0, sepc",
         "sd a0, {sepc_offset}(sp)",
-        // save sstatus
         "csrr a0, sstatus",
         "sd a0, {sstatus_offset}(sp)",
-        // save scause
         "csrr a0, scause",
         "sd a0, {scause_offset}(sp)",
-        // save stval
         "csrr a0, stval",
         "sd a0, {stval_offset}(sp)",
 
-        // call handler
+        // Pass &mut TrapFrame as the first argument.
         "mv a0, sp",
         "call {handler}",
 
-        // restore sepc
+        // Restore trap CSRs. The handler may have modified sepc.
         "ld a0, {sepc_offset}(sp)",
         "csrw sepc, a0",
-        // restore sstatus
         "ld a0, {sstatus_offset}(sp)",
         "csrw sstatus, a0",
-        // restore scause
-        "ld a0, {scause_offset}(sp)",
-        "csrw scause, a0",
-        // restore stval
-        "ld a0, {stval_offset}(sp)",
-        "csrw stval, a0",
 
-        // restore registers
+        // Restore general-purpose registers. Keep x5/t0 for last so we can
+        // use it to decide whether to switch back to the user stack.
         "ld x1, 8(sp)",
-        // x2 is sp, use addi to restore
         "ld x3, 24(sp)",
         "ld x4, 32(sp)",
-        "ld x5, 40(sp)",
         "ld x6, 48(sp)",
         "ld x7, 56(sp)",
         "ld x8, 64(sp)",
@@ -107,8 +115,24 @@ pub unsafe extern "C" fn __trap_entry() {
         "ld x29, 232(sp)",
         "ld x30, 240(sp)",
         "ld x31, 248(sp)",
-        // restore sp
+
+        // If sscratch is non-zero, it holds the user sp and we must switch
+        // back to it before sret. For S-mode traps, sscratch is zero.
+        "csrr x5, sscratch",
+        "bnez x5, .Lreturn_to_user",
+
+        // Return to S-mode: restore t0, release the trap frame, and sret.
+        "ld x5, 40(sp)",
         "addi sp, sp, {trap_frame_size}",
+        "sret",
+
+        // Return to U-mode: restore t0, release the kernel trap frame, then
+        // swap sp with sscratch so sp becomes the interrupted user sp and
+        // sscratch becomes the kernel trap stack top again.
+        ".Lreturn_to_user:",
+        "ld x5, 40(sp)",
+        "addi sp, sp, {trap_frame_size}",
+        "csrrw sp, sscratch, sp",
         "sret",
         trap_frame_size = const TRAP_FRAME_SIZE,
         sepc_offset = const TRAP_FRAME_SEPC_OFFSET,
@@ -127,6 +151,51 @@ pub struct TrapFrame {
     pub sstatus: usize,
     pub scause: usize,
     pub stval: usize,
+}
+
+macro_rules! register_indices {
+    ($($name:ident = $value:expr;)+) => {
+        $(
+            #[allow(dead_code)]
+            pub const $name: usize = $value;
+        )+
+    };
+}
+
+register_indices! {
+    ZERO = 0;
+    RA = 1;
+    SP = 2;
+    GP = 3;
+    TP = 4;
+    T0 = 5;
+    T1 = 6;
+    T2 = 7;
+    S0 = 8;
+    FP = 8;
+    S1 = 9;
+    A0 = 10;
+    A1 = 11;
+    A2 = 12;
+    A3 = 13;
+    A4 = 14;
+    A5 = 15;
+    A6 = 16;
+    A7 = 17;
+    S2 = 18;
+    S3 = 19;
+    S4 = 20;
+    S5 = 21;
+    S6 = 22;
+    S7 = 23;
+    S8 = 24;
+    S9 = 25;
+    S10 = 26;
+    S11 = 27;
+    T3 = 28;
+    T4 = 29;
+    T5 = 30;
+    T6 = 31;
 }
 
 pub const TRAP_FRAME_SIZE: usize = core::mem::size_of::<TrapFrame>();
@@ -253,24 +322,93 @@ impl InterruptCause {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Syscall {
+    Reserved,
+    PutChar,
+    Unknown(usize),
+}
+
+impl Syscall {
+    pub const SYS_PUTCHAR: usize = Self::PutChar.into_usize();
+
+    const fn into_usize(self) -> usize {
+        match self {
+            Self::PutChar => 1,
+            Self::Reserved => 0,
+            Self::Unknown(n) => n,
+        }
+    }
+
+    fn from_number(number: usize) -> Self {
+        match number {
+            Self::SYS_PUTCHAR => Self::PutChar,
+            0 => Self::Reserved,
+            _ => Self::Unknown(number),
+        }
+    }
+}
+
+impl Syscall {
+    pub fn krnl_handle(self, tf: &mut TrapFrame) {
+        match self {
+            Self::PutChar => {
+                let ch = tf.regs[A0] as u8;
+                krnl_print!("{}", ch as char);
+                tf.regs[A0] = 0;
+            }
+            Self::Reserved => {
+                krnl_println!("  syscall 0 reserved");
+                tf.regs[A0] = usize::MAX;
+            }
+            Self::Unknown(n) => {
+                krnl_println!("  syscall {} not implemented", n);
+                tf.regs[A0] = usize::MAX;
+            }
+        }
+    }
+}
+
+const TRACE_SYSCALLS: bool = false;
+
+
+
 #[unsafe(no_mangle)]
 pub extern "C" fn trap_handler(tf: &mut TrapFrame) {
     let sepc = tf.sepc;
     let stval = tf.stval;
     let cause = TrapCause::from_scause(tf.scause);
 
-    println!("trap!!");
-    println!("  scause = {} ({})", cause.name(), tf.scause);
-    println!("  sepc   = {:#x}", sepc);
-    println!("  stval  = {:#x}", stval);
+    let should_log_trap = !matches!(
+        cause,
+        TrapCause::Exception(ExceptionCause::EnvironmentCallFromUMode)
+    ) || TRACE_SYSCALLS;
+
+    if should_log_trap {
+        krnl_println!("trap!!");
+        krnl_println!("  scause = {} ({})", cause.name(), tf.scause);
+        krnl_println!("  sepc   = {:#x}", sepc);
+        krnl_println!("  stval  = {:#x}", stval);
+    }
+
+
 
     match cause {
         TrapCause::Exception(ExceptionCause::IllegalInstruction) => {
-            println!("  action = skip illegal instruction");
+            krnl_println!("  action = skip illegal instruction");
+            tf.sepc += 4;
+        }
+        TrapCause::Exception(ExceptionCause::EnvironmentCallFromUMode) => {
+            if should_log_trap {
+                krnl_println!("  action = handle ecall");
+            }
+            let syscall_num = tf.regs[A7];
+            let syscall = Syscall::from_number(syscall_num);
+            syscall.krnl_handle(tf);
             tf.sepc += 4;
         }
         _ => {
-            println!("  action = spin");
+            krnl_println!("  action = spin");
             loop {}
         }
     }

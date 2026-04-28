@@ -33,21 +33,21 @@ impl Write for Uart0 {
     }
 }
 
-pub fn print(args: fmt::Arguments) {
+pub fn krnl_print(args: fmt::Arguments) {
     Uart0.write_fmt(args).unwrap();
 }
 
 #[macro_export]
-macro_rules! print {
+macro_rules! krnl_print {
     ($($arg:tt)*) => {
-        $crate::uart::print(format_args!($($arg)*));
+        $crate::uart::krnl_print(format_args!($($arg)*));
     };
 }
 
 #[macro_export]
-macro_rules! println {
+macro_rules! krnl_println {
     ($($arg:tt)*) => {
-        $crate::uart::print(format_args!($($arg)*));
-        $crate::uart::print(format_args!("\n"));
+        $crate::uart::krnl_print(format_args!($($arg)*));
+        $crate::uart::krnl_print(format_args!("\n"));
     };
 }
