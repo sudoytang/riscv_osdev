@@ -30,4 +30,7 @@ SECTIONS
     . = ALIGN(16);
     . += 4096 * 16;
     boot_stack_top = .;
+
+    . = ALIGN(4096);
+    ekernel = .;
 }

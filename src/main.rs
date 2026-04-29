@@ -1,6 +1,7 @@
 #![no_std]
 #![no_main]
 
+mod mm;
 mod syscall;
 mod task;
 mod trap;
@@ -8,6 +9,13 @@ mod uart;
 mod user;
 
 use user::{user_main_0, user_main_1};
+
+
+unsafe extern "C" {
+    static ekernel: [u8; 0];
+}
+
+
 
 // Entry point
 // This sets up the boot stack and calls kernel_main
@@ -29,7 +37,14 @@ spin:
 pub extern "C" fn kernel_main() -> ! {
     trap::init();
     init_kernel_trap_stack();
+    mm::map_kernel_gigapages();
+    mm::enable_paging();
+
     krnl_println!("Hello, RISC-V!\n");
+
+
+    let ekernel_addr = core::ptr::addr_of!(ekernel) as usize;
+    krnl_println!("ekernel @ {:#x}", ekernel_addr);
 
     krnl_println!("Let's trigger a trap of illegal instruction...");
     unsafe {
@@ -41,7 +56,10 @@ pub extern "C" fn kernel_main() -> ! {
     task::init_task(0, user_main_0 as *const () as usize, task::user_stack_top(0));
     task::init_task(1, user_main_1 as *const () as usize, task::user_stack_top(1));
 
-    task::schedule();
+    // Now this page is only for S-mode, we cannot run user task
+    // Temporarily disable this
+    // task::schedule();
+    loop {}
 }
 
 #[panic_handler]
