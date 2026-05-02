@@ -6,15 +6,30 @@ mod syscall;
 mod task;
 mod trap;
 mod uart;
-mod user;
 
-use user::{user_main_0, user_main_1};
-
+// Integrate user binary code into kernel memory space
+core::arch::global_asm!(concat!(
+r#"
+.section .user_bin, "a"
+.align 12
+.global user_bin_start
+user_bin_start:
+"#,
+".incbin \"", env!("USER_BIN_PATH"), "\"\n",
+r#"
+.align 12
+.global user_bin_end
+user_bin_end:
+"#
+));
 
 unsafe extern "C" {
     static ekernel: [u8; 0];
 }
 
+// QEMU virt machine RAM: 128MB
+// TODO: Read DTB for real memory amount later
+pub const PHYSICAL_MEMORY_END: usize = 0x80000000 + 128 * 1024 * 1024;
 
 
 // Entry point
@@ -37,13 +52,14 @@ spin:
 pub extern "C" fn kernel_main() -> ! {
     trap::init();
     init_kernel_trap_stack();
+    let ekernel_addr = core::ptr::addr_of!(ekernel) as usize;
+    mm::init_frame_allocator(ekernel_addr);
     mm::map_kernel_gigapages();
     mm::enable_paging();
 
     krnl_println!("Hello, RISC-V!\n");
 
 
-    let ekernel_addr = core::ptr::addr_of!(ekernel) as usize;
     krnl_println!("ekernel @ {:#x}", ekernel_addr);
 
     krnl_println!("Let's trigger a trap of illegal instruction...");
@@ -53,17 +69,15 @@ pub extern "C" fn kernel_main() -> ! {
     }
     krnl_println!("Illegal instruction trap handled.");
 
-    task::init_task(0, user_main_0 as *const () as usize, task::user_stack_top(0));
-    task::init_task(1, user_main_1 as *const () as usize, task::user_stack_top(1));
+    task::init_task(0);
+    task::init_task(1);
 
-    // Now this page is only for S-mode, we cannot run user task
-    // Temporarily disable this
-    // task::schedule();
-    loop {}
+    task::schedule();
 }
 
 #[panic_handler]
-fn panic(_: &core::panic::PanicInfo) -> ! {
+fn panic(info: &core::panic::PanicInfo) -> ! {
+    krnl_println!("{}", info);
     loop {}
 }
 

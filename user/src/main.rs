@@ -1,4 +1,24 @@
-use crate::syscall;
+#![no_std]
+#![no_main]
+
+mod syscall {
+    pub const STDOUT_FD: usize = 1;
+    pub const SYS_WRITE: usize = 1;
+    pub const SYS_EXIT: usize = 2;
+}
+
+core::arch::global_asm!(
+r#"
+
+.section .text.entry
+.global _start
+
+_start:
+    j user_main_0
+    j user_main_1
+"#
+);
+
 
 struct UserStdout;
 
@@ -16,7 +36,7 @@ fn user_write(fd: usize, buf: &[u8]) -> usize {
     unsafe {
         core::arch::asm!(
             "ecall",
-            in("a7") syscall::Syscall::SYS_WRITE,
+            in("a7") syscall::SYS_WRITE,
             inlateout("a0") fd => ret,
             in("a1") buf.as_ptr() as usize,
             in("a2") buf.len(),
@@ -55,7 +75,7 @@ fn user_exit(exit_code: usize) -> ! {
     unsafe {
         core::arch::asm!(
             "ecall",
-            in("a7") syscall::Syscall::SYS_EXIT,
+            in("a7") syscall::SYS_EXIT,
             in("a0") exit_code as usize,
             options(noreturn),
         );
@@ -84,8 +104,13 @@ pub extern "C" fn user_main_0() -> ! {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn user_main_1() -> ! {
-    user_println!("Task 1");
+    user_println!("{}", "Task 1");
     user_println!("Hello from U-mode via syscall!");
     user_println!("Bye!");
     user_exit(0);
+}
+
+#[panic_handler]
+fn panic(_: &core::panic::PanicInfo) -> ! {
+    loop {}
 }

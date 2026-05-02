@@ -339,12 +339,19 @@ fn handle_syscall(syscall: Syscall, tf: &mut TrapFrame) {
 
             let ptr = tf.regs[A1] as *const u8;
             let size = tf.regs[A2];
-            let bytes: &[u8] = unsafe { core::slice::from_raw_parts(ptr, size) };
-            let mut count = 0;
-            for &b in bytes {
-                krnl_print!("{}", b as char);
-                count += 1;
-            }
+            // SUM (bit 18 of sstatus) must be set to allow S-mode to read
+            // from pages marked PTE_U, which is where the user buffer lives.
+            let count = unsafe {
+                core::arch::asm!("csrs sstatus, {sum}", sum = in(reg) 1usize << 18);
+                let bytes = core::slice::from_raw_parts(ptr, size);
+                let mut n = 0usize;
+                for &b in bytes {
+                    krnl_print!("{}", b as char);
+                    n += 1;
+                }
+                core::arch::asm!("csrc sstatus, {sum}", sum = in(reg) 1usize << 18);
+                n
+            };
             tf.regs[A0] = count;
         }
         Syscall::Exit => {

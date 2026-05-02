@@ -1,8 +1,5 @@
 use core::sync::atomic::{AtomicPtr, Ordering};
 
-use crate::Stack;
-
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TaskState {
     Ready,
@@ -14,6 +11,7 @@ pub struct Task {
     pub id: usize,
     pub entry: usize,
     pub user_sp: usize,
+    pub user_page_table_pa: usize,
     pub state: TaskState,
 }
 
@@ -21,20 +19,17 @@ const TASK_COUNT: usize = 2;
 
 static mut TASKS: [Task; TASK_COUNT] = [const { Task::empty() }; TASK_COUNT];
 
-static mut USER_STACKS: [Stack; TASK_COUNT] = [const { Stack::new() }; TASK_COUNT];
-
-pub fn user_stack_top(task_id: usize) -> usize {
-    unsafe {
-        (core::ptr::addr_of_mut!(USER_STACKS[task_id].0) as *mut u8)
-            .add(crate::STACK_SIZE) as usize
-    }
-}
 
 static CURRENT_TASK: AtomicPtr<Task> = AtomicPtr::new(core::ptr::null_mut());
 
-pub fn init_task(id: usize, entry: usize, user_sp: usize) {
+pub fn init_task(id: usize) {
+    let entry_va = 0x40000000 + id * 4;
+    let stack_pa = crate::mm::alloc_frame() as usize;
+    let user_sp_va = 0x40010000 + 4096;
+    let user_page_table_pa = crate::mm::create_user_page_table(stack_pa) as usize;
+    let task = Task::new(id, entry_va, user_sp_va, user_page_table_pa);
     unsafe {
-        TASKS[id] = Task::new(id, entry, user_sp);
+        TASKS[id] = task;
     }
 }
 
@@ -85,6 +80,14 @@ fn task_mut(id: usize) -> &'static mut Task {
 fn run_task(task: &mut Task) -> ! {
     set_current_task(task);
     mark_current_task_state(TaskState::Running);
+    let satp = (8usize << 60) | (task.user_page_table_pa >> 12);
+    unsafe {
+        core::arch::asm!(
+            "csrw satp, {satp}",
+            "sfence.vma",
+            satp = in(reg) satp,
+        )
+    }
     crate::krnl_println!("Entering user mode...");
     crate::enter_user_mode(task.entry, task.user_sp);
 }
@@ -103,15 +106,17 @@ impl Task {
             id: 0,
             entry: 0,
             user_sp: 0,
+            user_page_table_pa: 0,
             state: TaskState::Exited,
         }
     }
 
-    pub const fn new(id: usize, entry: usize, user_sp: usize) -> Self {
+    pub const fn new(id: usize, entry: usize, user_sp: usize, user_page_table_pa: usize) -> Self {
         Self {
             id,
             entry,
             user_sp,
+            user_page_table_pa,
             state: TaskState::Ready,
         }
     }
