@@ -1,3 +1,6 @@
+pub mod freelist;
+
+pub use freelist::{init_frame_allocator, alloc_frame, free_frame};
 
 unsafe extern "C" {
     static user_bin_start: [u8; 0];
@@ -54,35 +57,8 @@ pub fn enable_paging() {
     }
 }
 
-static mut FRAME_ALLOCATOR_NEXT_ADDR: usize = 0;
 
-pub fn init_frame_allocator(start_addr: usize) {
-    if start_addr % 4096 != 0 {
-        panic!("start_addr must be 4096-byte aligned");
-    }
-    unsafe {
-        FRAME_ALLOCATOR_NEXT_ADDR = start_addr;
-    }
-}
 
-pub fn alloc_frame() -> *mut u8 {
-    // Allocate a 4096 byte page
-    let frame = unsafe { FRAME_ALLOCATOR_NEXT_ADDR };
-    if frame >= crate::PHYSICAL_MEMORY_END {
-        panic!("Out of memory");
-    }
-    if frame as usize % 4096 != 0 {
-        panic!("FRAME_ALLOCATOR_NEXT_ADDR must be 4096-byte aligned, got {:#x}", frame);
-    }
-    unsafe {
-        FRAME_ALLOCATOR_NEXT_ADDR += 4096;
-    }
-    let res = frame as *mut u8;
-    unsafe {
-        core::ptr::write_bytes(res, 0, 4096);
-    }
-    res
-}
 
 pub fn map_page(root: *mut PageTable, va: usize, pa: usize, flags: usize) {
     // va[38:30] -> VPN[2]
@@ -142,4 +118,54 @@ pub fn create_user_page_table(user_stack_pa: usize) -> *mut PageTable {
     map_page(root, 0x40010000, user_stack_pa, PTE_V | PTE_U | PTE_R | PTE_W | PTE_A | PTE_D);
 
     root
+}
+
+pub fn free_user_page_table(root_pa: usize) {
+    // Traversing L2
+    let ekernel_addr = core::ptr::addr_of!(crate::ekernel) as usize;
+    let is_allocated_frame = |pa: usize| -> bool {
+        pa >= ekernel_addr && pa < crate::PHYSICAL_MEMORY_END
+    };
+    let root = root_pa as *mut PageTable;
+    for i in 0..512 {
+        if i == 0 || i == 2 {
+            // Kernel Gigapage, Skip
+            continue;
+        }
+        let pte = unsafe { (*root).entries[i] };
+        if pte & PTE_V == 0 {
+            // L1 PTE is not present, Skip
+            continue;
+        }
+        let l1_pa = (pte >> 10) << 12;
+        let l1_page_table = l1_pa as *mut PageTable;
+        for j in 0..512 {
+            let pte = unsafe { (*l1_page_table).entries[j] };
+            if pte & PTE_V == 0 {
+                // L0 PTE is not present, Skip
+                continue;
+            }
+            let l0_pa = (pte >> 10) << 12;
+            let l0_page_table = l0_pa as *mut PageTable;
+            for k in 0..512 {
+                let pte = unsafe { (*l0_page_table).entries[k] };
+                if pte & PTE_V == 0 {
+                    // L0 PTE is not present, Skip
+                    continue;
+                }
+                let pa = (pte >> 10) << 12;
+                if !is_allocated_frame(pa) {
+                    continue;
+                }
+                free_frame(pa);
+            }
+            free_frame(l0_pa as usize);
+        }
+        free_frame(l1_pa as usize);
+    }
+    free_frame(root_pa as usize);
+}
+
+pub fn switch_to_kernel_page_table() {
+    enable_paging();
 }

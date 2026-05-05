@@ -53,7 +53,7 @@ pub extern "C" fn kernel_main() -> ! {
     trap::init();
     init_kernel_trap_stack();
     let ekernel_addr = core::ptr::addr_of!(ekernel) as usize;
-    mm::init_frame_allocator(ekernel_addr);
+    mm::init_frame_allocator(ekernel_addr, PHYSICAL_MEMORY_END);
     mm::map_kernel_gigapages();
     mm::enable_paging();
 

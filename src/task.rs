@@ -24,7 +24,7 @@ static CURRENT_TASK: AtomicPtr<Task> = AtomicPtr::new(core::ptr::null_mut());
 
 pub fn init_task(id: usize) {
     let entry_va = 0x40000000 + id * 4;
-    let stack_pa = crate::mm::alloc_frame() as usize;
+    let stack_pa = crate::mm::alloc_frame();
     let user_sp_va = 0x40010000 + 4096;
     let user_page_table_pa = crate::mm::create_user_page_table(stack_pa) as usize;
     let task = Task::new(id, entry_va, user_sp_va, user_page_table_pa);
@@ -94,7 +94,10 @@ fn run_task(task: &mut Task) -> ! {
 
 pub fn exit_current_task(exit_code: usize) -> ! {
     mark_current_task_state(TaskState::Exited);
-
+    let task = CURRENT_TASK.load(Ordering::SeqCst);
+    assert!(!task.is_null());
+    crate::mm::switch_to_kernel_page_table();
+    crate::mm::free_user_page_table(unsafe { (*task).user_page_table_pa });
     crate::krnl_println!("  User task exited with code {}", exit_code);
 
     schedule();
