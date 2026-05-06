@@ -358,6 +358,11 @@ fn handle_syscall(syscall: Syscall, tf: &mut TrapFrame) {
             let exit_code = tf.regs[A0];
             crate::task::exit_current_task(exit_code);
         }
+        Syscall::Yield => {
+            // tf.sepc is advanced by 4 in the outer EnvironmentCallFromUMode handler
+            // after handle_syscall returns (including after the task is resumed).
+            crate::task::yield_current_task();
+        }
         Syscall::Unknown(n) => {
             krnl_println!("  syscall {} not implemented", n);
             tf.regs[A0] = usize::MAX;

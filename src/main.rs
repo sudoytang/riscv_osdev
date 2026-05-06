@@ -81,40 +81,21 @@ fn panic(info: &core::panic::PanicInfo) -> ! {
     loop {}
 }
 
-// Stack
-const STACK_SIZE: usize = 4096 * 16;
-
-#[repr(align(16))]
-struct Stack([u8; STACK_SIZE]);
-
-impl Stack {
-    const fn new() -> Self {
-        Self([0; STACK_SIZE])
-    }
-}
-
-
-static mut KERNEL_TRAP_STACK: Stack = Stack::new();
-
-fn kernel_trap_stack_top() -> usize {
-    unsafe { (core::ptr::addr_of_mut!(KERNEL_TRAP_STACK.0) as *mut u8).add(STACK_SIZE) as usize }
-}
-
-// Convention: When running in S-mode, the sscratch is 0
-// At the point before entering U-mode, set sscratch to kernel_trap_stack_top
+// Convention: When running in S-mode, sscratch = 0.
+// Each task sets sscratch to its own kernel stack top before entering U-mode.
 fn init_kernel_trap_stack() {
     unsafe {
-        core::arch::asm!("csrw sscratch, zero",);
+        core::arch::asm!("csrw sscratch, zero");
     }
 }
 
-
-
-pub fn enter_user_mode(entry: usize, user_sp: usize) -> ! {
+// kernel_sp: the task's kernel stack top, written to sscratch so that
+// U-mode traps land on the correct per-task kernel stack.
+pub fn enter_user_mode(entry: usize, user_sp: usize, kernel_sp: usize) -> ! {
     unsafe {
         core::arch::asm!(
             "csrw sepc, {entry}",
-            // Set sscratch to kernel trap stack top before entering U-mode.
+            // Set sscratch to this task's kernel stack top before entering U-mode.
             "csrw sscratch, {kernel_sp}",
             // Clear sstatus.SPP so sret returns to U-mode.
             "csrr t0, sstatus",
@@ -130,7 +111,7 @@ pub fn enter_user_mode(entry: usize, user_sp: usize) -> ! {
             "sret",
             entry = in(reg) entry,
             user_sp = in(reg) user_sp,
-            kernel_sp = in(reg) kernel_trap_stack_top(),
+            kernel_sp = in(reg) kernel_sp,
             sstatus_spp = const 1 << 8,
             sstatus_spie = const 1 << 5,
             options(noreturn),
