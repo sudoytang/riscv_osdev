@@ -2,10 +2,7 @@ pub mod freelist;
 
 pub use freelist::{init_frame_allocator, alloc_frame, free_frame};
 
-unsafe extern "C" {
-    static user_bin_start: [u8; 0];
-    static user_bin_end: [u8; 0];
-}
+use crate::program::{MAX_USER_CODE_PAGES, USER_CODE_VA, USER_STACK_VA};
 
 
 #[repr(align(4096))]
@@ -96,26 +93,38 @@ pub fn map_page(root: *mut PageTable, va: usize, pa: usize, flags: usize) {
 
 }
 
-// User code is always mapped at 0x40000000
-pub fn create_user_page_table(user_stack_pa: usize) -> *mut PageTable {
+/// Build a fresh user address space by copying `program` into private code pages.
+pub fn create_user_address_space(program: &[u8], user_stack_pa: usize) -> *mut PageTable {
+    let num_pages = (program.len() + 4095) / 4096;
+    assert!(
+        num_pages <= MAX_USER_CODE_PAGES,
+        "user program too large: {} pages",
+        num_pages
+    );
+
     let root = alloc_frame() as *mut PageTable;
-    // Map Kernel Gigapages to PageTable, allowing kernel to run in user vspace
     unsafe {
+        core::ptr::write_bytes(root as *mut u8, 0, 4096);
+        // Map kernel gigapages so the kernel can run in the user page table.
         (*root).entries[0] = KERNEL_ROOT_PAGE_TABLE.entries[0];
-        // 0x00000000 - 0x3FFFFFFF
         (*root).entries[2] = KERNEL_ROOT_PAGE_TABLE.entries[2];
-        // 0x80000000 - 0xBFFFFFFF
     }
-    // Map user code and stack
-    // Use 0x40000000 for user code, the PA is loaded in the kernal ELF
-    let bin_start = core::ptr::addr_of!(user_bin_start) as usize;
-    let bin_end = core::ptr::addr_of!(user_bin_end) as usize;
-    let num_pages = (bin_end - bin_start + 4095) / 4096;
+
+    let code_flags = PTE_V | PTE_U | PTE_R | PTE_X | PTE_A | PTE_D;
     for i in 0..num_pages {
-        map_page(root, 0x40000000 + i * 4096, bin_start + i * 4096, PTE_V | PTE_U | PTE_R | PTE_X | PTE_A | PTE_D);
+        let page_pa = alloc_frame();
+        let dst = page_pa as *mut u8;
+        unsafe {
+            core::ptr::write_bytes(dst, 0, 4096);
+            let src_off = i * 4096;
+            let copy_len = core::cmp::min(4096, program.len() - src_off);
+            core::ptr::copy_nonoverlapping(program.as_ptr().add(src_off), dst, copy_len);
+        }
+        map_page(root, USER_CODE_VA + i * 4096, page_pa, code_flags);
     }
-    // Use 0x40010000 for user stack (+65536), 1 page
-    map_page(root, 0x40010000, user_stack_pa, PTE_V | PTE_U | PTE_R | PTE_W | PTE_A | PTE_D);
+
+    let stack_flags = PTE_V | PTE_U | PTE_R | PTE_W | PTE_A | PTE_D;
+    map_page(root, USER_STACK_VA, user_stack_pa, stack_flags);
 
     root
 }

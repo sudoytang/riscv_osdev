@@ -45,28 +45,28 @@ macro_rules! user_println {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn user_main_0() -> ! {
-    user_println!("Task 0");
-    user_println!("Hello from U-mode via syscall!");
+    user_println!("[user.task_0] Task 0");
+    user_println!("[user.task_0] Hello from U-mode via syscall!");
     syscall::yield_();
 
-    user_println!("Let's trigger a trap of illegal instruction...");
+    user_println!("[user.task_0] Let's trigger a trap of illegal instruction...");
     unsafe {
         core::arch::asm!(".word 0");
     }
-    user_println!("Illegal instruction trap handled.");
-    user_println!("Bye!");
+    user_println!("[user.task_0] Illegal instruction trap handled.");
+    user_println!("[user.task_0] Bye!");
 
     syscall::exit(0);
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn user_main_1() -> ! {
-    user_println!("Task 1");
-    user_println!("Hello from U-mode via syscall!");
+    user_println!("[user.task_1] Task 1");
+    user_println!("[user.task_1] Hello from U-mode via syscall!");
     syscall::yield_();
 
-    user_println!("Task 1 resumed.");
-    user_println!("Bye!");
+    user_println!("[user.task_1] Task 1 resumed.");
+    user_println!("[user.task_1] Bye!");
     syscall::exit(0);
 }
 

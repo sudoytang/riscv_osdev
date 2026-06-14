@@ -2,10 +2,14 @@
 #![no_main]
 
 mod mm;
+mod program;
 mod syscall;
 mod task;
 mod trap;
 mod uart;
+
+// Forces a kernel rebuild when the embedded user binary changes (see build.rs).
+const _: &str = env!("USER_BIN_CHECKSUM");
 
 // Integrate user binary code into kernel memory space
 core::arch::global_asm!(concat!(
@@ -57,27 +61,35 @@ pub extern "C" fn kernel_main() -> ! {
     mm::map_kernel_gigapages();
     mm::enable_paging();
 
-    krnl_println!("Hello, RISC-V!\n");
+    krnl_println!("[kernel_main] Hello, RISC-V!\n");
 
 
-    krnl_println!("ekernel @ {:#x}", ekernel_addr);
+    krnl_println!("[kernel_main] ekernel @ {:#x}", ekernel_addr);
 
-    krnl_println!("Let's trigger a trap of illegal instruction...");
+    krnl_println!("[kernel_main] Let's trigger a trap of illegal instruction...");
     unsafe {
         // trigger a trap of illegal instruction
         core::arch::asm!(".word 0");
     }
-    krnl_println!("Illegal instruction trap handled.");
+    krnl_println!("[kernel_main] Illegal instruction trap handled.");
 
-    task::init_task(0);
-    task::init_task(1);
+    krnl_println!("[kernel_main] Spawning initial tasks...");
+    task::spawn(&program::USER_MAIN_0);
+    task::spawn(&program::USER_MAIN_1);
+    task::spawn(&program::USER_MAIN_1);
+    task::schedule_until_idle();
 
-    task::schedule();
+    krnl_println!("[kernel_main] Re-spawning user_main_0 to validate repeat run...");
+    task::spawn(&program::USER_MAIN_0);
+    task::schedule_until_idle();
+
+    krnl_println!("[kernel_main] All validations complete, kernel halted.");
+    loop {}
 }
 
 #[panic_handler]
 fn panic(info: &core::panic::PanicInfo) -> ! {
-    krnl_println!("{}", info);
+    krnl_println!("[panic_handler] {}", info);
     loop {}
 }
 

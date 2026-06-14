@@ -325,14 +325,14 @@ impl InterruptCause {
 fn handle_syscall(syscall: Syscall, tf: &mut TrapFrame) {
     match syscall {
         Syscall::Reserved => {
-            krnl_println!("  syscall 0 reserved");
+            krnl_println!("[handle_syscall]  syscall 0 reserved");
             tf.regs[A0] = usize::MAX;
         }
         Syscall::Write => {
             let fd = tf.regs[A0];
             if fd != STDOUT_FD {
                 // Now we only accept stdout.
-                krnl_println!("  invalid fd: {}", fd);
+                krnl_println!("[handle_syscall]  invalid fd: {}", fd);
                 tf.regs[A0] = usize::MAX;
                 return;
             }
@@ -364,7 +364,7 @@ fn handle_syscall(syscall: Syscall, tf: &mut TrapFrame) {
             crate::task::yield_current_task();
         }
         Syscall::Unknown(n) => {
-            krnl_println!("  syscall {} not implemented", n);
+            krnl_println!("[handle_syscall]  syscall {} not implemented", n);
             tf.regs[A0] = usize::MAX;
         }
     }
@@ -384,20 +384,20 @@ pub extern "C" fn trap_handler(tf: &mut TrapFrame) {
     ) || TRACE_SYSCALLS;
 
     if should_log_trap {
-        krnl_println!("trap!!");
-        krnl_println!("  scause = {} ({})", cause.name(), tf.scause);
-        krnl_println!("  sepc   = {:#x}", sepc);
-        krnl_println!("  stval  = {:#x}", stval);
+        krnl_println!("[trap_handler] trap!!");
+        krnl_println!("[trap_handler]  scause = {} ({})", cause.name(), tf.scause);
+        krnl_println!("[trap_handler]  sepc   = {:#x}", sepc);
+        krnl_println!("[trap_handler]  stval  = {:#x}", stval);
     }
 
     match cause {
         TrapCause::Exception(ExceptionCause::IllegalInstruction) => {
-            krnl_println!("  action = skip illegal instruction");
+            krnl_println!("[trap_handler]  action = skip illegal instruction");
             tf.sepc += 4;
         }
         TrapCause::Exception(ExceptionCause::EnvironmentCallFromUMode) => {
             if should_log_trap {
-                krnl_println!("  action = handle ecall");
+                krnl_println!("[trap_handler]  action = handle ecall");
             }
             let syscall_num = tf.regs[A7];
             let syscall = Syscall::from_number(syscall_num);
@@ -405,7 +405,7 @@ pub extern "C" fn trap_handler(tf: &mut TrapFrame) {
             tf.sepc += 4;
         }
         _ => {
-            krnl_println!("  action = spin");
+            krnl_println!("[trap_handler]  action = spin");
             loop {}
         }
     }

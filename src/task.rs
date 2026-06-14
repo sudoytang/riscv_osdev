@@ -1,5 +1,7 @@
 use core::sync::atomic::{AtomicPtr, Ordering};
 
+use crate::program::{ProgramEntry, USER_STACK_TOP, embedded_user_bin};
+
 // Callee-saved registers + ra/sp. Layout must match switch_context offsets.
 #[repr(C)]
 pub struct TaskContext {
@@ -70,6 +72,7 @@ unsafe extern "C" fn switch_context(current: *mut TaskContext, next: *mut TaskCo
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TaskState {
+    Unused,
     Ready,
     Running,
     Exited,
@@ -86,29 +89,53 @@ pub struct Task {
     pub context: TaskContext,
 }
 
-const TASK_COUNT: usize = 2;
+const MAX_TASKS: usize = 8;
 
-static mut TASKS: [Task; TASK_COUNT] = [const { Task::empty() }; TASK_COUNT];
+static mut TASKS: [Task; MAX_TASKS] = [const { Task::empty() }; MAX_TASKS];
 static mut SCHEDULER_CONTEXT: TaskContext = TaskContext::zero();
 static CURRENT_TASK: AtomicPtr<Task> = AtomicPtr::new(core::ptr::null_mut());
 
-pub fn init_task(id: usize) {
-    let entry_va = 0x40000000 + id * 4;
+/// Create a new runnable task by copying `entry`'s program image into private pages.
+pub fn spawn(entry: &ProgramEntry) -> Option<usize> {
+    let slot = find_free_slot()?;
+    let program = embedded_user_bin();
+
     let stack_pa = crate::mm::alloc_frame();
-    let user_sp_va = 0x40010000 + 4096;
-    let user_page_table_pa = crate::mm::create_user_page_table(stack_pa) as usize;
+    let user_sp_va = USER_STACK_TOP;
+    let page_table = crate::mm::create_user_address_space(program, stack_pa);
+    let user_page_table_pa = page_table as usize;
 
     let kernel_stack_pa = crate::mm::alloc_frame();
     let kernel_stack_top = kernel_stack_pa + 4096;
 
-    let mut task = Task::new(id, entry_va, user_sp_va, user_page_table_pa, kernel_stack_top);
-    // First run: switch_context will ret to task_first_run on the task's fresh kernel stack.
+    let entry_va = entry.entry_va();
+    let mut task = Task::new(slot, entry_va, user_sp_va, user_page_table_pa, kernel_stack_top);
     task.context.ra = task_first_run as *const () as usize;
     task.context.sp = kernel_stack_top;
+    task.state = TaskState::Ready;
 
     unsafe {
-        TASKS[id] = task;
+        TASKS[slot] = task;
     }
+
+    crate::krnl_println!(
+        "[spawn]  spawn slot {}: {} @ {:#x}",
+        slot,
+        entry.name,
+        entry_va
+    );
+
+    Some(slot)
+}
+
+fn find_free_slot() -> Option<usize> {
+    for i in 0..MAX_TASKS {
+        let task = task_mut(i);
+        if task.state == TaskState::Unused || task.state == TaskState::Exited {
+            return Some(i);
+        }
+    }
+    None
 }
 
 // Entry point for a task's first run. Called via `ret` from switch_context.
@@ -118,7 +145,7 @@ extern "C" fn task_first_run() {
     let (entry, user_sp, kernel_stack_top) = unsafe {
         ((*task).entry, (*task).user_sp, (*task).kernel_stack_top)
     };
-    crate::krnl_println!("Entering user mode...");
+    crate::krnl_println!("[task_first_run] Entering user mode...");
     crate::enter_user_mode(entry, user_sp, kernel_stack_top);
 }
 
@@ -144,9 +171,8 @@ fn switch_satp(user_page_table_pa: usize) {
     }
 }
 
-// The scheduler loop. Runs on the boot stack. Picks the next Ready task
-// and switches to it. Returns (loops) whenever a task calls sched().
-pub fn schedule() -> ! {
+/// Run the scheduler until no Ready tasks remain.
+pub fn schedule_until_idle() {
     loop {
         // After returning from a task: free the kernel stack if the task exited.
         let prev = CURRENT_TASK.load(Ordering::SeqCst);
@@ -167,12 +193,12 @@ pub fn schedule() -> ! {
         let start = if prev.is_null() {
             0
         } else {
-            (unsafe { (*prev).id } + 1) % TASK_COUNT
+            (unsafe { (*prev).id } + 1) % MAX_TASKS
         };
 
         let mut found = false;
-        for i in 0..TASK_COUNT {
-            let idx = (start + i) % TASK_COUNT;
+        for i in 0..MAX_TASKS {
+            let idx = (start + i) % MAX_TASKS;
             let task = task_mut(idx);
             if task.state == TaskState::Ready {
                 task.state = TaskState::Running;
@@ -205,8 +231,8 @@ pub fn schedule() -> ! {
         }
 
         if !found {
-            crate::krnl_println!("  No runnable tasks, kernel halted");
-            loop {}
+            crate::krnl_println!("[schedule_until_idle]  No runnable tasks");
+            return;
         }
     }
 }
@@ -229,7 +255,7 @@ fn sched() {
             core::ptr::addr_of_mut!(SCHEDULER_CONTEXT),
         );
     }
-    // Returns here when schedule() picks this task again.
+    // Returns here when schedule_until_idle() picks this task again.
 }
 
 pub fn yield_current_task() {
@@ -246,16 +272,17 @@ pub fn exit_current_task(exit_code: usize) -> ! {
 
     unsafe { (*task).state = TaskState::Exited; }
 
-    crate::krnl_println!("  User task exited with code {}", exit_code);
+    crate::krnl_println!("[exit_current_task]  User task exited with code {}", exit_code);
 
     // Switch back to kernel page table before freeing user mappings.
     crate::mm::switch_to_kernel_page_table();
     unsafe {
         crate::mm::free_user_page_table((*task).user_page_table_pa);
+        (*task).user_page_table_pa = 0;
     }
 
-    // Switch directly to the scheduler. schedule() will free the kernel stack
-    // on the next iteration (after we are no longer running on it).
+    // Switch directly to the scheduler. schedule_until_idle() will free the
+    // kernel stack on the next iteration (after we are no longer running on it).
     unsafe {
         switch_context(
             core::ptr::addr_of_mut!((*task).context),
@@ -274,7 +301,7 @@ impl Task {
             user_page_table_pa: 0,
             kernel_stack_top: 0,
             saved_user_sp: 0,
-            state: TaskState::Exited,
+            state: TaskState::Unused,
             context: TaskContext::zero(),
         }
     }

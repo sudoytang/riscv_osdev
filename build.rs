@@ -1,11 +1,17 @@
 use std::env;
+use std::fs;
 use std::process::Command;
 
 fn main() {
     let manifest_dir = env::var("CARGO_MANIFEST_DIR").unwrap();
     let out_dir = env::var("OUT_DIR").unwrap();
 
-    println!("cargo:rerun-if-changed=user/");
+    // Be explicit: watching `user/` alone is not always enough for Cargo to
+    // notice source edits and rebuild the embedded flat binary.
+    println!("cargo:rerun-if-changed=user/src");
+    println!("cargo:rerun-if-changed=user/Cargo.toml");
+    println!("cargo:rerun-if-changed=user/user.ld");
+    println!("cargo:rerun-if-changed=user/build.rs");
 
     // Find llvm-objcopy via rustc sysroot
     let rustc = env::var("RUSTC").unwrap_or_else(|_| "rustc".into());
@@ -48,5 +54,21 @@ fn main() {
         .expect("failed to run llvm-objcopy");
     assert!(status.success(), "llvm-objcopy failed");
 
+    let bin_bytes = fs::read(&bin).expect("failed to read user.bin");
+    let checksum = fnv1a(&bin_bytes);
+
     println!("cargo:rustc-env=USER_BIN_PATH={}", bin);
+    // Changing this env var forces the kernel crate to recompile when the
+    // embedded user binary content changes, even though USER_BIN_PATH stays the same.
+    println!("cargo:rustc-env=USER_BIN_CHECKSUM={:016x}", checksum);
+    println!("cargo:rerun-if-changed={}", bin);
+}
+
+fn fnv1a(bytes: &[u8]) -> u64 {
+    let mut hash = 0xcbf29ce484222325u64;
+    for &b in bytes {
+        hash ^= b as u64;
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    hash
 }
